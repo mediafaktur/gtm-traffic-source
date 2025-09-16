@@ -1,0 +1,1531 @@
+<script>
+  /**
+   * GTM Traffic Source Classifier & Persister
+   * =========================================
+   *
+   * A comprehensive traffic source attribution solution for Google Tag Manager that extends
+   * the Marketing Session ID (MSID) solution with precise traffic source classification
+   * and cross-tab persistence within marketing sessions.
+   *
+   * OVERVIEW
+   * --------
+   * This script classifies traffic sources based on a priority system and stores them
+   * in a session-scoped manner, ensuring accurate attribution that aligns with marketing
+   * session boundaries rather than technical browser sessions.
+   *
+   * DEPENDENCIES
+   * ------------
+   * - MSID Variable: msSessionId (must be evaluated first)
+   * - MSID Signals: window.__ms._signals (isStart, carryAllowed, inactiveTooLong, isExternalRef)
+   * - MSID Event: 'msid:ready' (optional, with polling fallback)
+   *
+   * STORAGE STRATEGY
+   * ----------------
+   * - sessionStorage['ms_ts_current']: Tab-scoped truth, easy form integration
+   * - sessionStorage['ms_entryCaptured:<SID>']: Idempotency flag per session
+   * - localStorage['ms_ts_by_sid:<SID>']: Cross-tab carry-over data
+   *
+   * CLASSIFICATION PRIORITY
+   * -----------------------
+   * 1. Click IDs (highest priority): gclid, gbraid, wbraid, msclkid, fbclid, ttclid, li_fat_id, twclid
+   * 2. UTM Parameters (with plausibility checks): utm_source, utm_medium, utm_campaign, utm_term, utm_content
+   *    - Normalized for consistent processing (trimmed, case-insensitive comparison)
+   *    - Original case preserved in raw_params for debugging
+   * 3. Organic Search (referrer analysis): Google, Bing, Yahoo, DuckDuckGo, Yandex, Baidu, Ecosia, Qwant, etc.
+   * 4. Social Media (paid/organic detection): Facebook, Instagram, LinkedIn, TikTok, Twitter, etc.
+   * 5. Referral Traffic: External domains (excluding self-referrals)
+   * 6. Direct Traffic (fallback): No referrer, no parameters
+   *
+   * PLAUSIBILITY FRAMEWORK
+   * ----------------------
+   * Prevents conflicting attributions by validating UTM parameters against channel groups:
+   * - Paid Search + Social Source = Not plausible
+   * - Paid Social + Search Medium = Not plausible
+   * - Shopping + Non-shopping Source = Not plausible
+   * - Display + Non-display Medium = Not plausible
+   *
+   * CROSS-TAB CARRY-OVER
+   * --------------------
+   * Traffic sources are carried over to new tabs when:
+   * - carryAllowed: true (no timeout and no external referrer)
+   * - Same marketing session (within 30-minute window)
+   * - No re-classification (TS is copied from localStorage)
+   * - Fallback carry-over: Even when signals are unclear, try carry-over first
+   *
+   * USAGE
+   * -----
+   * 1. Create GTM Custom HTML Tag
+   * 2. Set trigger: Same as MSID persist tag (after consent)
+   * 3. Ensure MSID variable is evaluated first
+   * 4. Reference in forms via: sessionStorage["ms_ts_current"]
+   *
+   * DEBUGGING
+   * ---------
+   * - Console logs: Check browser console for classification details
+   * - dataLayer events: 'traffic_source_classified' event with full TS data
+   * - Storage inspection: Check sessionStorage['ms_ts_current'] for current TS data
+   * - Conflict detection: plausibility_conflict flag for UTM parameter issues
+   * - Conflict reasons: source_conflict, medium_conflict, or both (pipe-separated)
+   *
+   * BROWSER COMPATIBILITY
+   * ---------------------
+   * This script is designed to work across all modern browsers and includes
+   * fallbacks for older browsers to ensure maximum compatibility.
+   *
+   * Supported Browsers:
+   * - Chrome 49+ (URLSearchParams, URL Constructor)
+   * - Firefox 45+ (URLSearchParams, URL Constructor)
+   * - Safari 10.1+ (URLSearchParams, URL Constructor)
+   * - Edge (Chromium) (URLSearchParams, URL Constructor)
+   * - Internet Explorer 11 (best-effort via fallbacks)
+   *
+   * Fallback Strategy:
+   * - URLSearchParams → Custom getParam() function
+   * - URL Constructor → <a> element method
+   * - addEventListener → attachEvent fallback
+   * - CustomEvent → createEvent fallback
+   *
+   * DESIGN DECISIONS FOR BROWSER COMPATIBILITY:
+   * -------------------------------------------
+   *
+   * 1. getParam() Function Design:
+   *    - Case-insensitive matching: Marketing tools often use inconsistent casing
+   *    - First occurrence priority: Multivalue parameters take first value (practical for UTM)
+   *    - No hash support: UTM parameters are in query string, not hash fragments
+   *    - Regex escaping: Prevents injection attacks and edge cases
+   *    - Null return: Clear distinction between missing vs empty parameters
+   *
+   * 2. URL Constructor Fallback:
+   *    - Uses <a> element: Available in all browsers since IE6
+   *    - Minimal properties: Only hostname, search, href (what we actually need)
+   *    - No base URL support: Not needed for referrer domain extraction
+   *
+   * 3. Event Listener Fallback:
+   *    - attachEvent for IE8/9: Maintains compatibility with very old browsers
+   *    - Consistent API: Same function signature for both modern and fallback
+   *    - Proper cleanup: removeEvent handles both addEventListener and detachEvent
+   *
+   * 4. Feature Detection Strategy:
+   *    - Runtime detection: Checks actual browser capabilities, not user agent
+   *    - Graceful degradation: Falls back to compatible methods when needed
+   *    - Performance optimization: Only loads fallbacks when necessary
+   *    - Debug logging: Console output for troubleshooting compatibility issues
+   *
+   * 5. Mini-Polyfills for IE11:
+   *    - String.includes(): Required for domain and parameter checking
+   *    - Array.includes(): Required for configuration array checking
+   *    - Date.now(): Replaced with new Date().getTime() for IE11 compatibility
+   *
+   * CONTENT SECURITY POLICY (CSP) CONSIDERATIONS:
+   * --------------------------------------------
+   *
+   * This script is designed as an inline GTM Custom HTML Tag. For strict CSP environments:
+   *
+   * Option 1: External Script Loading
+   * - Move script to external file (e.g., /js/gtm-traffic-source.js)
+   * - Load via GTM Custom HTML Tag: <script src="/js/gtm-traffic-source.js">
+   * - Update CSP: script-src 'self' https://yourdomain.com
+   *
+   * Option 2: CSP Nonce/Hash
+   * - Add nonce to script: <script nonce="random-value">
+   * - Update CSP: script-src 'nonce-random-value'
+   * - Or add hash: script-src 'sha256-hash-of-script'
+   *
+   * Option 3: GTM Server-Side Tagging
+   * - Move logic to server-side GTM
+   * - Bypass CSP restrictions entirely
+   * - Better performance and security
+   *
+   * Recommended CSP Headers:
+   * - script-src 'self' 'unsafe-inline' (for inline scripts)
+   * - script-src 'self' https://yourdomain.com (for external scripts)
+   * - object-src 'none' (security best practice)
+   * - base-uri 'self' (security best practice)
+   *
+   * @author Florian Pankarter / MEDIAFAKTUR
+   * @version 1.0.0
+   * @license MIT
+   * @see https://github.com/mediafaktur/gtm-traffic-source
+   */
+
+  (function () {
+    'use strict';
+
+    // ---- BROWSER COMPATIBILITY & FEATURE DETECTION ----
+    /**
+     * Browser Feature Detection and Fallbacks
+     * Provides compatibility for older browsers while maintaining performance
+     */
+
+    // Feature Detection: Check for modern APIs (robust detection)
+    var hasURLSearchParams = typeof window.URLSearchParams !== 'undefined';
+    var hasURLConstructor = typeof window.URL !== 'undefined';
+    var hasAddEventListener = typeof document.addEventListener !== 'undefined';
+    var hasCustomEvent = typeof window.CustomEvent !== 'undefined';
+    var hasStringIncludes = typeof String.prototype.includes === 'function';
+    var hasArrayIncludes = typeof Array.prototype.includes === 'function';
+
+    /**
+     * URL Parameter Extraction for GTM Traffic Source
+     *
+     * Features:
+     * - RFC-compliant parameter extraction
+     * - Case-insensitive matching (for marketing tool compatibility)
+     * - First occurrence priority (multivalue parameters)
+     * - No hash support (UTM parameters are in query string)
+     * - Regex escaping for security
+     *
+     * @param {string} name - Parameter name to extract
+     * @param {string} search - Optional search string (defaults to location.search)
+     * @returns {string|null} Parameter value or null if not found
+     */
+    function getParam(name, search) {
+      if (!search) search = window.location.search;
+
+      // Regex mit Escaping und Case-Insensitive
+      // Kein Hash-Support, da UTM-Parameter in query string stehen
+      var regex = new RegExp('[?&]' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^&#]*)', 'i');
+      var results = regex.exec(search);
+
+      if (!results) return null;
+
+      // Dekodierung mit + zu Leerzeichen (mit try/catch für kaputte URLs)
+      try {
+        return decodeURIComponent(results[1].replace(/\+/g, ' '));
+      } catch (e) {
+        // Fallback: unencoded zurückgeben wenn decodeURIComponent fehlschlägt
+        return results[1].replace(/\+/g, ' ');
+      }
+    }
+
+    /**
+     * URL Constructor Fallback using <a> element
+     * Provides hostname, search, and href properties for older browsers
+     */
+    function createURL(url, base) {
+      if (hasURLConstructor) {
+        return new URL(url, base);
+      }
+
+      // Fallback using <a> element (works in all browsers)
+      var a = document.createElement('a');
+      if (base) {
+        var b = document.createElement('a');
+        b.href = base;
+        a.href = b.href; // base setzen
+      }
+      a.href = url;
+      return {
+        href: a.href,
+        hostname: a.hostname || '',
+        search: a.search || ''
+      };
+    }
+
+    /**
+     * Event Listener Fallback for older browsers
+     * Supports both addEventListener and attachEvent
+     */
+    function addEvent(element, event, handler) {
+      if (hasAddEventListener) {
+        element.addEventListener(event, handler, false);
+      } else if (element.attachEvent) {
+        element.attachEvent('on' + event, handler);
+      }
+    }
+
+    /**
+     * Event Listener Removal Fallback for older browsers
+     */
+    function removeEvent(element, event, handler) {
+      if (hasAddEventListener) {
+        element.removeEventListener(event, handler, false);
+      } else if (element.detachEvent) {
+        element.detachEvent('on' + event, handler);
+      }
+    }
+
+    /**
+     * String.includes() Polyfill for IE11
+     * Required for domain and parameter checking
+     */
+    if (!hasStringIncludes) {
+      String.prototype.includes = function(search, start) {
+        if (typeof start !== 'number') {
+          start = 0;
+        }
+        if (start + search.length > this.length) {
+          return false;
+        } else {
+          return this.indexOf(search, start) !== -1;
+        }
+      };
+    }
+
+    /**
+     * Array.includes() Polyfill for IE11
+     * Required for configuration array checking
+     */
+    if (!hasArrayIncludes) {
+      Array.prototype.includes = function(searchElement, fromIndex) {
+        if (this == null) {
+          throw new TypeError('Array.prototype.includes called on null or undefined');
+        }
+        var O = Object(this);
+        var len = parseInt(O.length) || 0;
+        if (len === 0) {
+          return false;
+        }
+        var n = parseInt(fromIndex) || 0;
+        var k = n >= 0 ? n : Math.max(len + n, 0);
+        while (k < len) {
+          if (O[k] === searchElement) {
+            return true;
+          }
+          k++;
+        }
+        return false;
+      };
+    }
+
+    /**
+     * CustomEvent Polyfill for older browsers
+     * Required for msid:ready event communication
+     */
+    if (!hasCustomEvent) {
+      // Function expression instead of declaration (ES5 compatible)
+      var CustomEvent = function(event, params) {
+        params = params || { bubbles: false, cancelable: false, detail: null };
+        var evt = document.createEvent('CustomEvent');
+        evt.initCustomEvent(event, params.bubbles, params.cancelable, params.detail);
+        return evt;
+      };
+      CustomEvent.prototype = (window.Event && window.Event.prototype) || {};
+      window.CustomEvent = CustomEvent;
+    }
+
+    // ---- DEBUG UTILITIES ----
+    /**
+     * Debug logging utility that respects CONFIG.DEBUG setting
+     * @param {string} level - Log level (log, warn, error)
+     * @param {string} message - Log message
+     * @param {*} data - Optional data to log
+     */
+    function debugLog(level, message, data) {
+      if (typeof CONFIG !== 'undefined' && CONFIG.DEBUG && window.console && window.console[level]) {
+        if (data) {
+          window.console[level](message, data);
+        } else {
+          window.console[level](message);
+        }
+      }
+    }
+
+    // Log browser compatibility status for debugging
+    debugLog('log', 'GTM Traffic Source - Browser Compatibility:', {
+      URLSearchParams: hasURLSearchParams,
+      URLConstructor: hasURLConstructor,
+      addEventListener: hasAddEventListener,
+      CustomEvent: hasCustomEvent,
+      StringIncludes: hasStringIncludes,
+      ArrayIncludes: hasArrayIncludes,
+      fallbacks: !hasURLSearchParams || !hasURLConstructor || !hasAddEventListener || !hasStringIncludes || !hasArrayIncludes
+    });
+
+    // ---- CONFIGURATION ----
+    /**
+     * Main configuration object containing all settings for traffic source classification
+     * and storage. This configuration is designed to match BigQuery SQL logic for
+     * maximum compatibility with existing analytics workflows.
+     */
+    var CONFIG = {
+      // Debug mode - set to true for development, false in production
+      DEBUG: false,
+      // Storage keys for session and cross-tab persistence
+      STORAGE_PREFIX: 'ms_ts',                    // Prefix for traffic source storage keys
+      ENTRY_CAPTURED_PREFIX: 'ms_entryCaptured',  // Prefix for idempotency flags
+      CURRENT_ALIAS: 'ms_ts_current',             // Alias for easy form integration
+
+      // Classification priorities (matching BigQuery SQL logic)
+      // Higher priority sources override lower priority ones
+      PRIORITIES: [
+        'click_id',      // Click IDs (gclid, fbclid, etc.) - Highest priority
+        'utm',           // UTM parameters - High priority with plausibility checks
+        'organic',       // Organic search - Medium priority
+        'social',        // Social media (paid/organic) - Medium priority
+        'referral',      // Referral traffic - Low priority
+        'direct'         // Direct traffic - Fallback
+      ],
+
+      // Channel groups (matching Google Analytics standard)
+      CHANNEL_GROUPS: {
+        'direct': 'Direct',
+        'paid_search': 'Paid Search',
+        'paid_social': 'Paid Social',
+        'paid_shopping': 'Paid Shopping',
+        'paid_video': 'Paid Video',
+        'display': 'Display',
+        'display_remarketing': 'Display',
+        'organic_search': 'Organic Search',
+        'organic_social': 'Organic Social',
+        'organic_shopping': 'Organic Shopping',
+        'organic_video': 'Organic Video',
+        'email': 'Email',
+        'affiliate': 'Affiliates',
+        'referral': 'Referral',
+        'audio': 'Audio',
+        'sms': 'SMS',
+        'mobile_push': 'Mobile Push Notifications',
+        'cross_network': 'Cross-network',
+        'unassigned': 'Unassigned'
+      },
+
+      // Search engines (matching BigQuery logic)
+      SEARCH_ENGINES: [
+        'google.com', 'google.de', 'google.co.uk', 'google.fr', 'google.es',
+        'bing.com', 'yahoo.com', 'duckduckgo.com', 'yandex.com',
+        'baidu.com', 'ask.com', 'aol.com', 'ecosia.com', 'qwant.com'
+      ],
+
+      // Mail clients (matching BigQuery logic)
+      MAIL_CLIENTS: [
+        'mail', 't-online', 'gmail', 'outlook', 'yahoo-mail', 'hotmail'
+      ],
+
+      // Debug tools to exclude from organic classification
+      DEBUG_TOOLS: [
+        'tagassistant.google.com',
+        'www.google.com/tagmanager',
+        'tagmanager.google.com',
+        'analytics.google.com',
+        'search.google.com/test',
+        'developers.google.com'
+      ],
+
+      // Social platforms (matching BigQuery logic)
+      SOCIAL_PLATFORMS: [
+        'facebook.com', 'instagram.com', 'twitter.com', 'x.com',
+        'linkedin.com', 'pinterest.com', 'tiktok.com', 'youtube.com',
+        'snapchat.com', 'reddit.com', 'badoo.com', 'whatsapp.com',
+        'dailymotion.com', 'disneyplus.com', 'netflix.com', 'vimeo.com', 'twitch.com'
+      ],
+
+      // Self-referral domains (should match MSID REF_CHECK_MODE)
+      SELF_REFERRAL_DOMAINS: [
+        // Add your domains here, e.g.:
+        // 'example.com', 'www.example.com', 'shop.example.com'
+      ]
+    };
+
+    // ---- UTILITIES ----
+    /**
+     * Safely retrieves data from storage with error handling
+     * @param {string} key - Storage key
+     * @param {Storage} storage - Storage object (sessionStorage or localStorage)
+     * @returns {string|null} Stored value or null if error
+     */
+    function safeStorageGet(key, storage) {
+      try {
+        return storage.getItem(key);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    /**
+     * Safely stores data in storage with error handling
+     * @param {string} key - Storage key
+     * @param {string} value - Value to store
+     * @param {Storage} storage - Storage object (sessionStorage or localStorage)
+     * @returns {boolean} True if successful, false if error
+     */
+    function safeStorageSet(key, value, storage) {
+      try {
+        storage.setItem(key, value);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    /**
+     * Gets current timestamp for classification
+     * Uses IE11-compatible method for maximum compatibility
+     * @returns {number} Current timestamp in milliseconds
+     */
+    function getCurrentTimestamp() {
+      return new Date().getTime();
+    }
+
+    /**
+     * Generates unique ID for traffic source classification
+     * @returns {string} Unique ID in format: ts_[timestamp]_[random]
+     */
+    function generateId() {
+      return 'ts_' + getCurrentTimestamp() + '_' + Math.random().toString(36).substring(2, 8);
+    }
+
+    // ---- URL & REFERRER UTILITIES ----
+    /**
+     * Gets current page URL for traffic source classification
+     * @returns {string} Current page URL
+     */
+    function getCurrentUrl() {
+      return window.location.href;
+    }
+
+    /**
+     * Gets document referrer for traffic source classification
+     * @returns {string} Document referrer or empty string
+     */
+    function getReferrer() {
+      return document.referrer || '';
+    }
+
+    /**
+     * Gets URL parameters for traffic source classification
+     * Uses getParam() for better browser compatibility
+     * @returns {Object} URL parameters object with get method
+     */
+    function getUrlParams() {
+      return {
+        get: function(name) {
+          return getParam(name);
+        }
+      };
+    }
+
+    /**
+     * Extracts domain from document referrer
+     * Uses createURL() for better browser compatibility
+     * @returns {string} Referrer domain or empty string
+     */
+    function getReferrerDomain() {
+      try {
+        if (!document.referrer) return '';
+        return createURL(document.referrer).hostname;
+      } catch (e) {
+        return '';
+      }
+    }
+
+    /**
+     * Determines if referrer is a self-referral (internal navigation)
+     * @param {string} refDomain - Referrer domain
+     * @param {string} currentDomain - Current page domain
+     * @returns {boolean} True if self-referral
+     */
+    function isSelfReferral(refDomain, currentDomain) {
+      if (!refDomain) return false;
+
+      // Check against configured self-referral domains
+      for (var i = 0; i < CONFIG.SELF_REFERRAL_DOMAINS.length; i++) {
+        if (refDomain === CONFIG.SELF_REFERRAL_DOMAINS[i]) return true;
+      }
+
+      // Fallback: eTLD+1 comparison (matching MSID logic)
+      // This ensures subdomains are treated as internal
+      var refETLD = getETLD1(refDomain);
+      var currentETLD = getETLD1(currentDomain);
+      return refETLD === currentETLD && refETLD !== '';
+    }
+
+    /**
+     * Extracts eTLD+1 (effective top-level domain + 1) from hostname
+     * @param {string} hostname - Hostname to extract eTLD+1 from
+     * @returns {string} eTLD+1 or original hostname
+     */
+    function getETLD1(hostname) {
+      try {
+        var parts = hostname.split('.');
+        return parts.length >= 2 ? parts.slice(-2).join('.') : hostname;
+      } catch (e) {
+        return hostname;
+      }
+    }
+
+    // ---- CLASSIFICATION LOGIC ----
+    /**
+     * Main traffic source classification function that implements priority-based
+     * attribution logic matching BigQuery SQL standards.
+     *
+     * Classification Priority:
+     * 1. Click IDs (highest) - Platform-specific attribution
+     * 2. UTM Parameters - Marketing-controlled attribution with plausibility checks
+     * 3. Organic Search - Referrer-based attribution
+     * 4. Social Media - Platform-based attribution
+     * 5. Referral Traffic - Domain-based attribution
+     * 6. Direct Traffic (fallback) - No attribution available
+     *
+     * @returns {Object} Complete traffic source object with all attribution data
+     */
+    function classifyTrafficSource(timestamp) {
+      // Gather all available data for classification
+      var url = getCurrentUrl();                    // Current page URL
+      var referrer = getReferrer();                 // Document referrer
+      var refDomain = getReferrerDomain();          // Referrer domain
+      var currentDomain = window.location.hostname; // Current domain
+      var params = getUrlParams();                  // URL parameters
+
+      // Use provided timestamp or fallback to current time
+      // This ensures consistency with MSID timestamp across all tags
+      timestamp = timestamp || getCurrentTimestamp();
+
+      // Initialize result object with default values
+      // This structure matches BigQuery output format for compatibility
+      var result = {
+        id: generateId(),                    // Unique TS ID for this classification
+        timestamp: timestamp,                // When this classification occurred
+        entry_url: url,                      // URL where user entered
+        referrer: referrer,                  // Where user came from
+        method: 'unknown',                   // Classification method used
+        channel_group: 'unknown',            // High-level channel category
+        source: 'unknown',                   // Traffic source platform
+        medium: 'unknown',                   // Traffic medium type
+        campaign: '',                        // Campaign name
+        term: '',                           // Search term or keyword
+        content: '',                        // Content variant
+        ad_platform: '',                    // Advertising platform
+        click_id: '',                       // Click ID if available
+        raw_params: {},                     // Raw UTM parameters
+        classifier_version: '1.0.0',        // Version for debugging
+        source_of_truth: 'unknown'          // Will be set based on classification method
+      };
+
+    // Extract all UTM parameters with normalization
+    // Trim whitespace to avoid data quality issues
+    var utmSource = (params.get('utm_source') || '').trim();
+    var utmMedium = (params.get('utm_medium') || '').trim();
+    var utmCampaign = (params.get('utm_campaign') || '').trim();
+    var utmTerm = (params.get('utm_term') || '').trim();
+    var utmContent = (params.get('utm_content') || '').trim();
+
+    // Store raw parameters (normalized but original case preserved)
+    result.raw_params = {
+      utm_source: utmSource,
+      utm_medium: utmMedium,
+      utm_campaign: utmCampaign,
+      utm_term: utmTerm,
+      utm_content: utmContent
+    };
+
+    // Create normalized versions for logic processing
+    // This ensures consistent comparison regardless of case
+    var _s = utmSource.toLowerCase();
+    var _m = normalizeUTMMedium(utmMedium.toLowerCase());
+    var _c = utmCampaign.toLowerCase();
+
+      // PRIORITY 1: Click IDs (highest priority - platform-specific attribution)
+      // Click IDs provide the most reliable attribution as they are set by ad platforms
+      // Priority order: gclid > gbraid > wbraid > msclkid > fbclid > ttclid > li_fat_id > twclid
+      var clickId = params.get('gclid') || params.get('gbraid') || params.get('wbraid') ||
+        params.get('msclkid') || params.get('fbclid') || params.get('ttclid') ||
+        params.get('li_fat_id') || params.get('twclid') || '';
+
+      if (clickId) {
+        result.method = 'click_id';
+        result.click_id = clickId;
+        result.source_of_truth = 'click_id';
+
+        // Google Ads (gclid) - Highest priority for Google Ads
+        if (params.get('gclid')) {
+          result.channel_group = 'paid_search';
+          result.source = 'google';
+          result.medium = 'cpc';
+          result.ad_platform = 'google_ads';
+        }
+        // Google Ads (gbraid) - Enhanced conversions for Google Ads
+        else if (params.get('gbraid')) {
+          result.channel_group = 'paid_search';
+          result.source = 'google';
+          result.medium = 'cpc';
+          result.ad_platform = 'google_ads';
+        }
+        // Google Ads (wbraid) - Enhanced conversions for Google Ads
+        else if (params.get('wbraid')) {
+          result.channel_group = 'paid_search';
+          result.source = 'google';
+          result.medium = 'cpc';
+          result.ad_platform = 'google_ads';
+        }
+        // Microsoft Ads (msclkid) - Search advertising
+        else if (params.get('msclkid')) {
+          result.channel_group = 'paid_search';
+          result.source = 'microsoft';
+          result.medium = 'cpc';
+          result.ad_platform = 'microsoft_ads';
+        }
+        // Facebook Ads (fbclid) - Social advertising
+        else if (params.get('fbclid')) {
+          result.channel_group = 'paid_social';
+          result.source = 'facebook';
+          result.medium = 'paid_social';
+          result.ad_platform = 'facebook_ads';
+        }
+        // TikTok Ads (ttclid) - Social advertising
+        else if (params.get('ttclid')) {
+          result.channel_group = 'paid_social';
+          result.source = 'tiktok';
+          result.medium = 'paid_social';
+          result.ad_platform = 'tiktok_ads';
+        }
+        // LinkedIn Ads (li_fat_id) - Professional social advertising
+        else if (params.get('li_fat_id')) {
+          result.channel_group = 'paid_social';
+          result.source = 'linkedin';
+          result.medium = 'paid_social';
+          result.ad_platform = 'linkedin_ads';
+        }
+        // Twitter Ads (twclid) - Social advertising
+        else if (params.get('twclid')) {
+          result.channel_group = 'paid_social';
+          result.source = 'twitter';
+          result.medium = 'paid_social';
+          result.ad_platform = 'twitter_ads';
+        }
+
+      // UTM parameters can override Click-ID values, but with plausibility checks
+      // This allows marketing teams to override platform defaults when appropriate
+
+      // Source: High error probability → Plausibility check required
+      // Medium: Click ID determines semantically correct medium (not overridden)
+      if (utmSource && isPlausibleSource(_s, result.channel_group)) {
+        result.source = utmSource;  // Override platform source if plausible
+      }
+      // Note: Medium is NOT overridden by UTM to maintain Click ID as source of truth
+      // Click IDs set semantically correct mediums (e.g., 'paid_social' for social ads)
+
+      // Campaign, Term, Content: Low error probability → Always override
+      // These parameters are typically auto-generated or clearly defined
+      if (utmCampaign) result.campaign = utmCampaign;  // Always override campaign
+      if (utmTerm) result.term = utmTerm;              // Always override term
+      if (utmContent) result.content = utmContent;     // Always override content
+
+      // Flag plausibility conflicts for debugging and transparency
+      // Note: Only source conflicts are flagged since medium is not overridden
+      var conflictReason = '';
+      if (utmSource && !isPlausibleSource(_s, result.channel_group)) {
+        conflictReason = 'source_conflict';
+      }
+      // Medium conflicts are not flagged since UTM medium is not used for Click ID classification
+      if (conflictReason) {
+        result.plausibility_conflict = true;
+        result.conflict_reason = conflictReason;
+      }
+
+        return result;  // Return early - Click ID classification is complete
+      }
+
+      // PRIORITY 2: UTM Parameters (marketing-controlled attribution)
+      // UTM parameters provide marketing team control over attribution
+      // Channel group is determined based on source and medium combinations
+      if (utmSource) {
+        result.method = 'utm';
+        result.channel_group = 'unknown'; // Will be determined based on analysis
+        result.source = utmSource;
+        result.medium = utmMedium || 'unknown';
+        result.campaign = utmCampaign;
+        result.term = utmTerm;
+        result.content = utmContent;
+        result.source_of_truth = 'utm';
+
+        // UTM-Only Classification: No plausibility checks (Option A)
+        // Marketing teams have full control over UTM parameters
+        // Only flag obvious hard conflicts for debugging
+
+        // Soft Alias: utm_medium=paid bei Social-Quellen (nicht Video-Plattformen)
+        if (_m === 'paid' && isSocialSource(_s) && !isVideoPlatform(_s)) {
+          result.soft_alias_used = true;
+          result.medium = 'paid_social';
+        }
+
+        // Set channel group for paid_social medium (after soft alias)
+        if (_m === 'paid_social' || (_m === 'paid' && isSocialSource(_s) && !isVideoPlatform(_s))) {
+          result.channel_group = 'paid_social';
+          result.medium = 'paid_social';
+        }
+
+        // Hard Conflicts: Offensichtliche Widersprüche flaggen (case-insensitive)
+        if (_s === 'facebook' && _m === 'cpc') {
+          result.plausibility_conflict = true;
+          result.conflict_reason = 'hard_conflict_source_medium';
+        }
+        if (_s === 'google' && _m === 'social') {
+          result.plausibility_conflict = true;
+          result.conflict_reason = 'hard_conflict_source_medium';
+        }
+        if (_s === 'linkedin' && _m === 'cpc') {
+          result.plausibility_conflict = true;
+          result.conflict_reason = 'hard_conflict_source_medium';
+        }
+
+      // Determine channel group based on medium and source (matching BigQuery logic)
+      if (utmMedium) {
+        // Use normalized versions for consistent comparison
+        var medium = _m;
+        var source = _s;
+        var campaign = _c;
+
+        // Brand vs Generic detection
+        var isBrand = campaign.includes('brand') || campaign.includes('branded');
+
+        // Handle normalized medium values first (exact matches)
+        // This prevents normalized values from falling through to substring matching
+        var classifiedExact = false;
+
+        if (medium === 'paid_search') {
+          result.channel_group = 'paid_search';
+          result.medium = isBrand ? 'paid-brand' : 'paid-generic';
+          classifiedExact = true;
+        }
+        else if (medium === 'organic_search') {
+          result.channel_group = 'organic_search';
+          result.medium = 'organic';
+          classifiedExact = true;
+        }
+        else if (medium === 'display_remarketing') {
+          result.channel_group = 'display_remarketing';
+          result.medium = 'display_remarketing';
+          classifiedExact = true;
+        }
+        else if (medium === 'display') {
+          result.channel_group = 'display';
+          result.medium = 'display';
+          classifiedExact = true;
+        }
+        else if (medium === 'email') {
+          result.channel_group = 'email';
+          result.medium = 'email';
+          classifiedExact = true;
+        }
+        else if (medium === 'paid_social') {
+          result.channel_group = 'paid_social';
+          result.medium = 'paid_social';
+          classifiedExact = true;
+        }
+        else if (medium === 'organic_social') {
+          result.channel_group = 'organic_social';
+          result.medium = 'social';
+          classifiedExact = true;
+        }
+
+        if (classifiedExact) {
+          if (!isValidUTMCombination(_s, medium, _c)) {
+            result.medium = 'unknown';
+            result.missing_medium = true;
+            debugLog('warn', 'UTM validation failed for exact match, medium set to unknown', { source: _s, medium: medium, campaign: _c });
+          }
+          return result;
+        }
+
+          if (medium.includes('cpc') || medium.includes('ppc')) {
+            // Shopping platforms
+            if (source.includes('alibaba') || source.includes('amazon') ||
+              source.includes('google shopping') || source.includes('shopify') ||
+              source.includes('etsy') || source.includes('ebay') ||
+              source.includes('stripe') || source.includes('walmart') ||
+              campaign.includes('shop') || campaign.includes('shopping')) {
+              result.channel_group = 'paid_shopping';
+            }
+            // Search engines
+            else if (source.includes('baidu') || source.includes('bing') ||
+              source.includes('duckduckgo') || source.includes('ecosia') ||
+              source.includes('google') || source.includes('yahoo') ||
+              source.includes('yandex')) {
+              result.channel_group = 'paid_search';
+              if (isBrand) result.medium = 'paid-brand';
+              else result.medium = 'paid-generic';
+            }
+            // Social platforms
+            else if (source.includes('badoo') || source.includes('facebook') ||
+              source.includes('fb') || source.includes('instagram') ||
+              source.includes('linkedin') || source.includes('pinterest') ||
+              source.includes('tiktok') || source.includes('twitter') ||
+              source.includes('whatsapp')) {
+              result.channel_group = 'paid_social';
+            }
+            // Video platforms
+            else if (source.includes('dailymotion') || source.includes('disneyplus') ||
+              source.includes('netflix') || source.includes('youtube') ||
+              source.includes('vimeo') || source.includes('twitch')) {
+              result.channel_group = 'paid_video';
+            }
+            // Cross-network
+            else if (campaign.includes('cross-network')) {
+              result.channel_group = 'cross_network';
+            }
+            // Default paid search
+            else {
+              result.channel_group = 'paid_search';
+              if (isBrand) result.medium = 'paid-brand';
+              else result.medium = 'paid-generic';
+            }
+          }
+          // Display/Remarketing
+          else if (medium.includes('disp') || medium.includes('banner') ||
+            medium.includes('expandable') || medium.includes('interstitial') ||
+            medium.includes('cpm') || source.includes('criteo')) {
+            if (campaign.includes('remarketing') || source.includes('retargeting') ||
+              medium.includes('retargeting')) {
+              result.channel_group = 'display_remarketing';
+            } else {
+              result.channel_group = 'display';
+            }
+          }
+          // Email
+          else if (medium.includes('email') || medium.includes('e-mail') ||
+            medium.includes('e_mail') || source.includes('email') ||
+            source.includes('e-mail') || source.includes('e_mail')) {
+            result.channel_group = 'email';
+          }
+          // Affiliate
+          else if (medium.includes('affiliate')) {
+            result.channel_group = 'affiliate';
+          }
+          // Mobile Push
+          else if (medium.includes('push') || medium.includes('mobile') ||
+            medium.includes('notification')) {
+            result.channel_group = 'mobile_push';
+          }
+          // Audio
+          else if (medium.includes('audio')) {
+            result.channel_group = 'audio';
+          }
+          // SMS
+          else if (medium.includes('sms')) {
+            result.channel_group = 'sms';
+          }
+          // Social (organic)
+          else if (medium.includes('social') || medium.includes('social_media') ||
+            medium.includes('social-network') || medium.includes('sm')) {
+            result.channel_group = 'organic_social';
+          }
+          // Video (organic)
+          else if (medium.includes('video')) {
+            result.channel_group = 'organic_video';
+          }
+          // Default
+          else {
+            result.channel_group = 'unassigned';
+          }
+        }
+
+        // Fallback for UTM-source without medium (source-driven classification)
+        if (result.channel_group === 'unassigned' || result.channel_group === 'unknown') {
+          result.missing_medium = true; // Flag for data quality monitoring
+          if (isVideoPlatform(_s)) {
+            result.channel_group = 'organic_video';
+            result.medium = 'unknown';
+          } else if (isSocialSource(_s)) {
+            result.channel_group = 'organic_social';
+            result.medium = 'unknown';
+          } else if (/^(google|bing|yahoo|yandex|duckduckgo|baidu)$/.test(_s)) {
+            result.channel_group = 'organic_search';
+            result.medium = 'unknown';
+          }
+          debugLog('info', 'Source-driven fallback applied (missing medium)', { source: _s, channel_group: result.channel_group, missing_medium: true });
+        }
+
+        // UTM validation: Set medium to unknown for invalid combinations
+        if (!utmMedium || !isValidUTMCombination(_s, _m, _c)) {
+          result.medium = 'unknown';
+          result.missing_medium = true;
+          debugLog('warn', 'UTM validation failed, medium set to unknown', { source: _s, medium: _m, campaign: _c });
+        }
+
+        return result;
+      }
+
+      // PRIORITY 3: Organic Search
+      if (isSearchEngine(refDomain) && !isDebugTool(refDomain)) {
+        result.method = 'organic';
+        result.source = getSearchEngineName(refDomain);
+        result.medium = 'organic';
+        result.source_of_truth = 'referrer';
+
+        // Determine organic channel group
+        var source = result.source.toLowerCase();
+        if (source.includes('alibaba') || source.includes('amazon') ||
+          source.includes('google shopping') || source.includes('shopify') ||
+          source.includes('etsy') || source.includes('ebay') ||
+          source.includes('stripe') || source.includes('walmart')) {
+          result.channel_group = 'organic_shopping';
+        } else if (source.includes('dailymotion') || source.includes('disneyplus') ||
+          source.includes('netflix') || source.includes('youtube') ||
+          source.includes('vimeo') || source.includes('twitch')) {
+          result.channel_group = 'organic_video';
+        } else {
+          result.channel_group = 'organic_search';
+        }
+
+        // Extract search term from referrer
+        var searchTerm = extractSearchTerm(referrer, refDomain);
+        if (searchTerm) result.term = searchTerm;
+
+        return result;
+      }
+
+      // PRIORITY 4: Social Media
+      if (isSocialPlatform(refDomain)) {
+        result.method = 'social';
+        result.source = getSocialPlatformName(refDomain);
+        result.medium = 'social';
+        result.source_of_truth = 'referrer';
+
+        // Determine social channel group
+        var source = result.source.toLowerCase();
+        if (source.includes('dailymotion') || source.includes('disneyplus') ||
+          source.includes('netflix') || source.includes('youtube') ||
+          source.includes('vimeo') || source.includes('twitch')) {
+          result.channel_group = 'organic_video';
+        } else {
+          result.channel_group = 'organic_social';
+        }
+
+        return result;
+      }
+
+      // PRIORITY 5: Mail Clients (matching BigQuery logic)
+      if (isMailClient(refDomain)) {
+        result.method = 'mail';
+        result.channel_group = 'email';
+        result.source = 'mail';
+        result.medium = 'email';
+        result.source_of_truth = 'referrer';
+
+        return result;
+      }
+
+      // PRIORITY 6: Referral
+      if (refDomain && !isSelfReferral(refDomain, currentDomain)) {
+        result.method = 'referral';
+        result.channel_group = 'referral';
+        result.source = refDomain;
+        result.medium = 'referral';
+        result.source_of_truth = 'referrer';
+
+        return result;
+      }
+
+      // PRIORITY 7: Direct
+      result.method = 'direct';
+      result.channel_group = 'direct';
+      result.source = '(direct)';
+      result.medium = '(none)';
+      result.source_of_truth = 'direct';
+
+      return result;
+    }
+
+    /**
+     * Validates UTM parameter combinations for data quality
+     * @param {string} source - UTM source (normalized)
+     * @param {string} medium - UTM medium (normalized)
+     * @param {string} campaign - UTM campaign (normalized)
+     * @returns {boolean} True if UTM combination is valid
+     */
+    function isValidUTMCombination(source, medium, campaign) {
+      if (!source || !medium) return false;
+
+      // Ungültige Platzhalter
+      var bad = ['', 'null', 'undefined', 'none', 'unknown'];
+      if (bad.indexOf(source) !== -1 || bad.indexOf(medium) !== -1) return false;
+
+      var s = source;            // bereits lowercased
+      var m = medium;            // bereits normalisiert (z.B. paid_social, paid_search, organic_social, email, display, ...)
+      var isSearchSrc = /^(google|bing|yahoo|yandex|duckduckgo|baidu)$/.test(s);
+      var isSocialSrc = /^(facebook|fb|instagram|ig|linkedin|tiktok|twitter|x|snapchat|pinterest)$/.test(s);
+      var isVideoSrc  = /^(youtube|vimeo|twitch|dailymotion|disneyplus|netflix)$/.test(s);
+
+      // Suchquellen ↔ erwartete Medien
+      if (isSearchSrc && (m === 'paid_social' || m === 'organic_social' || m === 'email' || m === 'display')) return false;
+
+      // Socialquellen ↔ erwartete Medien
+      if (isSocialSrc && (m === 'paid_search' || m === 'organic_search' || m === 'email')) return false;
+
+      // Videoplattform als Quelle ↔ Medium "social" ist verdächtig
+      if (isVideoSrc && (m === 'paid_search' || m === 'organic_search' || m === 'email')) return false;
+
+      // sehr grobe Heuristiken für Shopping/Brand (optional)
+      if (m === 'paid_search' && /shop|shopping|pla/.test(campaign)) return true;
+
+      return true; // sonst zulassen
+    }
+
+    /**
+     * Checks if domain is a search engine for organic classification
+     * @param {string} domain - Domain to check
+     * @returns {boolean} True if search engine
+     */
+    function isSearchEngine(domain) {
+      for (var i = 0; i < CONFIG.SEARCH_ENGINES.length; i++) {
+        if (domain.includes(CONFIG.SEARCH_ENGINES[i])) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Checks if domain is a debug tool to exclude from organic classification
+     * @param {string} domain - Domain to check
+     * @returns {boolean} True if debug tool
+     */
+    function isDebugTool(domain) {
+      for (var i = 0; i < CONFIG.DEBUG_TOOLS.length; i++) {
+        if (domain.includes(CONFIG.DEBUG_TOOLS[i])) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Gets standardized search engine name from domain
+     * @param {string} domain - Domain to check
+     * @returns {string} Standardized search engine name
+     */
+    function getSearchEngineName(domain) {
+      if (domain.includes('google')) return 'google';
+      if (domain.includes('bing')) return 'bing';
+      if (domain.includes('yahoo')) return 'yahoo';
+      if (domain.includes('duckduckgo')) return 'duckduckgo';
+      if (domain.includes('yandex')) return 'yandex';
+      if (domain.includes('baidu')) return 'baidu';
+      if (domain.includes('ask')) return 'ask';
+      if (domain.includes('aol')) return 'aol';
+      if (domain.includes('ecosia')) return 'ecosia';
+      if (domain.includes('qwant')) return 'qwant';
+      return domain;
+    }
+
+    /**
+     * Checks if domain is a social platform
+     * @param {string} domain - Domain to check
+     * @returns {boolean} True if social platform
+     */
+    function isSocialPlatform(domain) {
+      for (var i = 0; i < CONFIG.SOCIAL_PLATFORMS.length; i++) {
+        if (domain.includes(CONFIG.SOCIAL_PLATFORMS[i])) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Checks if domain is a mail client
+     * @param {string} domain - Domain to check
+     * @returns {boolean} True if mail client
+     */
+    function isMailClient(domain) {
+      for (var i = 0; i < CONFIG.MAIL_CLIENTS.length; i++) {
+        if (domain.includes(CONFIG.MAIL_CLIENTS[i])) return true;
+      }
+      return false;
+    }
+
+    // ---- UTM NORMALIZATION ----
+    /**
+     * Normalizes UTM medium values to standard forms for consistent processing
+     * Maps common synonyms to standardized values to reduce data quality issues
+     * @param {string} medium - UTM medium parameter (lowercase)
+     * @returns {string} Normalized medium value
+     */
+    function normalizeUTMMedium(medium) {
+      if (!medium) return medium;
+
+      // Social media synonyms
+      if (medium === 'paidsocial' || medium === 'social_paid' || medium === 'socialpaid') {
+        return 'paid_social';
+      }
+      if (medium === 'social' || medium === 'social_media' || medium === 'socialmedia') {
+        return 'organic_social';
+      }
+
+      // Search synonyms (including cpc/ppc)
+      if (medium === 'cpc' || medium === 'ppc' || medium === 'paidsearch' || medium === 'search_paid' || medium === 'searchpaid') {
+        return 'paid_search';
+      }
+      if (medium === 'organicsearch' || medium === 'search_organic' || medium === 'searchorganic') {
+        return 'organic_search';
+      }
+
+      // Display synonyms
+      if (medium === 'display' || medium === 'banner' || medium === 'banners') {
+        return 'display';
+      }
+      if (medium === 'remarketing' || medium === 'retargeting') {
+        return 'display_remarketing';
+      }
+
+      // Email synonyms
+      if (medium === 'email' || medium === 'e-mail' || medium === 'e_mail' || medium === 'mail') {
+        return 'email';
+      }
+
+      // Return original if no normalization needed
+      return medium;
+    }
+
+    // ---- PLAUSIBILITY CHECKS ----
+    /**
+     * Checks if UTM source is a social platform for soft alias detection
+     * @param {string} utmSource - UTM source parameter (normalized)
+     * @returns {boolean} True if source is a social platform
+     */
+    function isSocialSource(utmSource) {
+      var source = utmSource.toLowerCase();
+      return source.includes('facebook') || source.includes('instagram') ||
+        source.includes('linkedin') || source.includes('tiktok') ||
+        source.includes('twitter') || source.includes('pinterest') ||
+        source.includes('snapchat');
+    }
+
+    /**
+     * Checks if UTM source is a video platform for video classification
+     * @param {string} utmSource - UTM source parameter (normalized)
+     * @returns {boolean} True if source is a video platform
+     */
+    function isVideoPlatform(utmSource) {
+      var source = utmSource.toLowerCase();
+      return source.includes('youtube') || source.includes('vimeo') ||
+        source.includes('twitch') || source.includes('dailymotion') ||
+        source.includes('disneyplus') || source.includes('netflix');
+    }
+
+    /**
+     * Validates UTM source parameters against channel groups to prevent
+     * conflicting attributions. This prevents scenarios like:
+     * - gclid (Google Ads) + utm_source=facebook (conflicting)
+     * - fbclid (Facebook) + utm_source=google (conflicting)
+     *
+     * @param {string} utmSource - UTM source parameter
+     * @param {string} channelGroup - Channel group determined by Click ID
+     * @returns {boolean} True if source is plausible for channel group
+     */
+    function isPlausibleSource(utmSource, channelGroup) {
+      var source = utmSource.toLowerCase();
+
+      // Paid Search + Social Source = not plausible
+      // Google Ads should not have Facebook as source
+      if (channelGroup === 'paid_search' &&
+        (source.includes('facebook') || source.includes('instagram') ||
+          source.includes('linkedin') || source.includes('tiktok'))) {
+        return false;
+      }
+
+      // Paid Social + Search Source = not plausible
+      // Facebook Ads should not have Google as source
+      if (channelGroup === 'paid_social' &&
+        (source.includes('google') || source.includes('bing') ||
+          source.includes('yahoo'))) {
+        return false;
+      }
+
+      // Shopping + Non-shopping Source = not plausible
+      if (channelGroup === 'paid_shopping' &&
+        !(source.includes('amazon') || source.includes('google') ||
+          source.includes('shop') || source.includes('ebay'))) {
+        return false;
+      }
+
+      // Display + Non-display Source = not plausible
+      if (channelGroup === 'display' &&
+        (source.includes('google') || source.includes('bing') ||
+          source.includes('facebook') || source.includes('linkedin'))) {
+        return false;
+      }
+
+      // Video + Non-video Source = not plausible
+      if (channelGroup === 'paid_video' &&
+        !(source.includes('youtube') || source.includes('vimeo') ||
+          source.includes('twitch') || source.includes('dailymotion'))) {
+        return false;
+      }
+
+      return true;
+    }
+
+
+    /**
+     * Gets standardized social platform name from domain
+     * @param {string} domain - Domain to check
+     * @returns {string} Standardized social platform name
+     */
+    function getSocialPlatformName(domain) {
+      if (domain.includes('facebook')) return 'facebook';
+      if (domain.includes('instagram')) return 'instagram';
+      if (domain.includes('twitter') || domain.includes('x.com')) return 'twitter';
+      if (domain.includes('linkedin')) return 'linkedin';
+      if (domain.includes('pinterest')) return 'pinterest';
+      if (domain.includes('tiktok')) return 'tiktok';
+      if (domain.includes('youtube')) return 'youtube';
+      if (domain.includes('snapchat')) return 'snapchat';
+      if (domain.includes('reddit')) return 'reddit';
+      if (domain.includes('badoo')) return 'badoo';
+      if (domain.includes('whatsapp')) return 'whatsapp';
+      if (domain.includes('dailymotion')) return 'dailymotion';
+      if (domain.includes('disneyplus')) return 'disneyplus';
+      if (domain.includes('netflix')) return 'netflix';
+      if (domain.includes('vimeo')) return 'vimeo';
+      if (domain.includes('twitch')) return 'twitch';
+      return domain;
+    }
+
+    /**
+     * Extracts search term from referrer URL for organic search traffic
+     * Uses createURL() and getParam() for better browser compatibility
+     *
+     * Supported search engines and their parameter names:
+     * - Google: 'q'
+     * - Bing: 'q'
+     * - Yahoo: 'p'
+     * - DuckDuckGo: 'q'
+     * - Yandex: 'text'
+     * - Baidu: 'wd'
+     *
+     * @param {string} referrer - Referrer URL
+     * @param {string} domain - Search engine domain
+     * @returns {string} Search term or empty string
+     */
+    function extractSearchTerm(referrer, domain) {
+      try {
+        var url = createURL(referrer);
+
+        // Different search engines use different parameter names
+        if (domain.includes('google')) {
+          return getParam('q', url.search) || '';  // Google uses 'q'
+        } else if (domain.includes('bing')) {
+          return getParam('q', url.search) || '';  // Bing uses 'q'
+        } else if (domain.includes('yahoo')) {
+          return getParam('p', url.search) || '';  // Yahoo uses 'p'
+        } else if (domain.includes('duckduckgo')) {
+          return getParam('q', url.search) || '';  // DuckDuckGo uses 'q'
+        } else if (domain.includes('yandex')) {
+          return getParam('text', url.search) || '';  // Yandex uses 'text'
+        } else if (domain.includes('baidu')) {
+          return getParam('wd', url.search) || '';  // Baidu uses 'wd'
+        }
+
+        return '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    // ---- RACE CONDITION HANDLING ----
+    /**
+     * Handles race conditions between MSID and TS plugin initialization.
+     * Uses event-driven approach with polling fallback for maximum reliability.
+     *
+     * @param {Function} callback - Function to execute when MSID is ready
+     * @param {number} maxAttempts - Maximum polling attempts (default: 50)
+     *
+     * Strategy:
+     * 1. Check immediately if MSID is already available
+     * 2. Listen for 'msid:ready' event (preferred method)
+     * 3. Fallback to polling every 100ms if event doesn't fire
+     * 4. Give up after maxAttempts to prevent infinite loops
+     */
+    function waitForMSID(callback, maxAttempts) {
+      // ES5 compatible: Set default value inside function
+      if (typeof maxAttempts === 'undefined') {
+        maxAttempts = 50;
+      }
+
+      var attempts = 0;
+
+      // Immediate check: MSID might already be available
+      if (typeof window.__ms !== 'undefined' && window.__ms.sessionId) {
+        callback();
+        return;
+      }
+
+      // Event-driven approach: Listen for MSID ready event
+      var eventHandler = function (event) {
+        removeEvent(document, 'msid:ready', eventHandler);
+        callback();
+      };
+
+      addEvent(document, 'msid:ready', eventHandler);
+
+      // Polling fallback: Check every 100ms if event doesn't fire
+      var interval = setInterval(function () {
+        attempts++;
+
+        if (typeof window.__ms !== 'undefined' && window.__ms.sessionId) {
+          // MSID is now available
+          clearInterval(interval);
+          removeEvent(document, 'msid:ready', eventHandler);
+          callback();
+        } else if (attempts >= maxAttempts) {
+          // Give up after max attempts
+          clearInterval(interval);
+          removeEvent(document, 'msid:ready', eventHandler);
+          debugLog('warn', 'MSID not available after ' + maxAttempts + ' attempts');
+        }
+      }, 100); // Check every 100ms
+    }
+
+    // ---- MAIN EXECUTION ----
+    /**
+     * Main execution function that orchestrates traffic source classification
+     * and storage based on MSID session signals.
+     *
+     * Execution Flow:
+     * 1. Validate MSID session ID availability
+     * 2. Check idempotency (prevent duplicate classification)
+     * 3. Determine classification strategy based on MSID signals
+     * 4. Classify traffic source or carry over from previous tab
+     * 5. Store results in sessionStorage and localStorage
+     * 6. Expose data for form integration and debugging
+     */
+    function main() {
+      // Get MSID session ID from GTM variable
+      // This is replaced by GTM with the actual session ID at runtime
+      var sessionId = {{msSessionId}}; // GTM will replace this
+    if (!sessionId) {
+      debugLog('warn', 'TS Classifier: No MSID session ID available');
+      return;
+    }
+
+    // Get MSID decision signals for session logic
+    // These signals determine how to handle this pageview
+    var signals = (window.__ms && window.__ms._signals) || {};
+
+    // Use MSID timestamp for consistency across all tags
+    // This ensures all tags in the same pageview have identical timestamps
+    var timestamp = signals.now || getCurrentTimestamp();
+
+    // Generate storage keys for this session
+    var capturedKey = CONFIG.ENTRY_CAPTURED_PREFIX + ':' + sessionId;  // Idempotency flag
+    var carryKey = CONFIG.STORAGE_PREFIX + '_by_sid:' + sessionId;     // Cross-tab carry-over
+
+    // Check idempotency: Prevent duplicate classification within same session
+    // This ensures TS is only classified once per marketing session
+    var alreadyCaptured = safeStorageGet(capturedKey, sessionStorage);
+    if (alreadyCaptured) {
+      debugLog('log', 'TS Classifier: Already captured for session', sessionId);
+      return;
+    }
+
+    var trafficSource = null;
+
+    // Decision logic based on MSID signals
+    // This determines whether to classify new TS or carry over from previous tab
+    if (signals.isStart) {
+      // New marketing session started
+      // This happens when: external referrer, timeout exceeded, or first visit
+      debugLog('log', 'TS Classifier: New session detected, classifying...');
+      trafficSource = classifyTrafficSource(timestamp);
+
+    } else if (signals.carryAllowed) {
+      // Cross-tab carry-over is allowed
+      // This happens when: same marketing session, no timeout, no external referrer
+      var carryOverData = safeStorageGet(carryKey, localStorage);
+      if (carryOverData) {
+        try {
+          // Parse and use existing TS data from previous tab
+          trafficSource = JSON.parse(carryOverData);
+          debugLog('log', 'TS Classifier: Carrying over from previous tab');
+        } catch (e) {
+          // Fallback: classify if carry-over data is corrupted
+          debugLog('warn', 'TS Classifier: Failed to parse carry-over data, classifying...');
+          trafficSource = classifyTrafficSource();
+        }
+      } else {
+        // Fallback: classify if no carry-over data available
+        debugLog('log', 'TS Classifier: No carry-over data, classifying...');
+        trafficSource = classifyTrafficSource();
+      }
+
+    } else {
+      // Fallback: Try carry-over first, then classify if no data available
+      // This happens when signals are unclear or missing
+      var co = safeStorageGet(carryKey, localStorage);
+      if (co) {
+        try {
+          trafficSource = JSON.parse(co);
+          debugLog('log', 'TS Classifier: Fallback carry-over from previous tab');
+        } catch (e) {
+          debugLog('warn', 'TS Classifier: Failed to parse fallback carry-over data, classifying...');
+          trafficSource = classifyTrafficSource(timestamp);
+        }
+      } else {
+        debugLog('log', 'TS Classifier: Fallback classification...');
+        trafficSource = classifyTrafficSource(timestamp);
+      }
+    }
+
+    if (!trafficSource) {
+      debugLog('error', 'TS Classifier: Failed to classify traffic source');
+      return;
+    }
+
+    // Store traffic source data in sessionStorage (tab-scoped truth)
+    // This is the primary storage for current tab and form integration
+
+    // Start-Case: Clear alias before writing for true session start
+    // This ensures clean state when MSID signals a new marketing session
+    if (signals.isStart) {
+      try {
+        sessionStorage.removeItem(CONFIG.CURRENT_ALIAS);
+        debugLog('log', 'TS Classifier: Cleared alias for new session start');
+      } catch(e) {
+        debugLog('warn', 'TS Classifier: Failed to clear alias:', e);
+      }
+    }
+
+    var tsJson = JSON.stringify(trafficSource);
+    safeStorageSet(CONFIG.CURRENT_ALIAS, tsJson, sessionStorage);  // Easy form access
+    safeStorageSet(capturedKey, 'true', sessionStorage);           // Idempotency flag
+
+    // Store per-SID for explicit session binding
+    // This creates a direct mapping between session ID and traffic source data
+    safeStorageSet(CONFIG.STORAGE_PREFIX + ':' + sessionId, tsJson, sessionStorage);
+
+    // Store in localStorage for cross-tab carry-over
+    // This allows new tabs to inherit TS from previous tabs within same session
+    safeStorageSet(carryKey, tsJson, localStorage);
+
+    // Debug output for development and troubleshooting
+    var debugInfo = {
+      sessionId: sessionId,
+      method: trafficSource.method,
+      channel_group: trafficSource.channel_group,
+      source: trafficSource.source,
+      medium: trafficSource.medium,
+      campaign: trafficSource.campaign
+    };
+
+    // Add conflict information if present
+    if (trafficSource.plausibility_conflict) {
+      debugInfo.plausibility_conflict = true;
+      debugInfo.conflict_reason = trafficSource.conflict_reason;
+      debugLog('warn', 'TS Classifier: Plausibility conflict detected:', {
+        conflict_reason: trafficSource.conflict_reason,
+        click_id: trafficSource.click_id,
+        utm_source: trafficSource.raw_params.utm_source,
+        utm_medium: trafficSource.raw_params.utm_medium
+      });
+    }
+
+    // Add soft alias information if present
+    if (trafficSource.soft_alias_used) {
+      debugInfo.soft_alias_used = true;
+      debugLog('log', 'TS Classifier: Soft alias used - utm_medium=paid normalized to paid_social');
+    }
+
+    debugLog('log', 'TS Classifier: Stored traffic source:', debugInfo);
+
+    // Expose to dataLayer for debugging and external integration
+    // This allows other GTM tags to access TS data if needed
+    if (window.dataLayer) {
+      window.dataLayer.push({
+        'event': 'traffic_source_classified',
+        'traffic_source': trafficSource
+      });
+    }
+  }
+
+  // Execute with race condition handling
+  // This ensures MSID is available before attempting traffic source classification
+  waitForMSID(main);
+
+}) ();
+</script>
