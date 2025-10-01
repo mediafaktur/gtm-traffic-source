@@ -414,6 +414,20 @@
       SELF_REFERRAL_DOMAINS: [
         // Add your domains here, e.g.:
         // 'example.com', 'www.example.com', 'shop.example.com'
+      ],
+
+      // Custom URL parameters configuration
+      // Define which custom parameters should be extracted and stored
+      // Note: Parameters are prefixed with 'cp_' to avoid conflicts with reserved fields
+      // Example: ['adgroupid', 'location', 'device_type', 'placement']
+      CUSTOM_PARAMS: [],
+
+      // Reserved field names that cannot be used as custom parameters
+      RESERVED_FIELDS: [
+        'id', 'timestamp', 'entry_url', 'referrer', 'method', 'channel_group',
+        'source', 'medium', 'campaign', 'term', 'content', 'ad_platform',
+        'click_id', 'raw_params', 'classifier_version', 'source_of_truth',
+        'plausibility_conflict', 'conflict_reason', 'soft_alias_used', 'missing_medium'
       ]
     };
 
@@ -429,6 +443,39 @@
         return storage.getItem(key);
       } catch (e) {
         return null;
+      }
+    }
+
+    /**
+     * Cleans up old ms_ts_by_sid:* keys from localStorage to keep it lean
+     * Only runs on new session start to avoid performance impact
+     * @param {string} currentSessionId - Current session ID to keep
+     */
+    function cleanupOldSessionKeys(currentSessionId) {
+      try {
+        var keysToRemove = [];
+        var prefix = CONFIG.STORAGE_PREFIX + '_by_sid:';
+
+        // Check all localStorage keys
+        for (var i = 0; i < localStorage.length; i++) {
+          var key = localStorage.key(i);
+          if (key && key.indexOf(prefix) === 0 && key !== prefix + currentSessionId) {
+            keysToRemove.push(key);
+          }
+        }
+
+        // Remove old keys (limit to 10 to avoid performance issues)
+        var removedCount = 0;
+        for (var j = 0; j < keysToRemove.length && removedCount < 10; j++) {
+          localStorage.removeItem(keysToRemove[j]);
+          removedCount++;
+        }
+
+        if (removedCount > 0) {
+          debugLog('log', 'TS Classifier: Cleaned up ' + removedCount + ' old session keys from localStorage');
+        }
+      } catch (e) {
+        debugLog('warn', 'TS Classifier: Failed to cleanup old session keys:', e);
       }
     }
 
@@ -600,6 +647,40 @@
     var utmTerm = (params.get('utm_term') || '').trim();
     var utmContent = (params.get('utm_content') || '').trim();
 
+    // Extract custom parameters with conflict prevention
+    var customParams = {};
+    for (var i = 0; i < CONFIG.CUSTOM_PARAMS.length; i++) {
+      var paramName = CONFIG.CUSTOM_PARAMS[i];
+      var paramValue = params.get(paramName);
+      if (paramValue) {
+        // Check for reserved field conflicts
+        if (CONFIG.RESERVED_FIELDS.indexOf(paramName) !== -1) {
+          debugLog('warn', 'Custom parameter conflicts with reserved field:', {
+            param: paramName,
+            reserved: true
+          });
+          // Skip this parameter to avoid conflicts
+          continue;
+        }
+
+        // Add prefix to avoid future conflicts
+        var prefixedName = 'cp_' + paramName;
+        var trimmedValue = paramValue.trim();
+
+        // Guardrail: Cap extremely long values to prevent storage overflow
+        if (trimmedValue.length > 2048) {
+          trimmedValue = trimmedValue.substring(0, 2048);
+          debugLog('warn', 'Custom parameter value truncated (too long):', {
+            param: prefixedName,
+            originalLength: paramValue.trim().length,
+            truncatedLength: 2048
+          });
+        }
+
+        customParams[prefixedName] = trimmedValue;
+      }
+    }
+
     // Store raw parameters (normalized but original case preserved)
     result.raw_params = {
       utm_source: utmSource,
@@ -608,6 +689,20 @@
       utm_term: utmTerm,
       utm_content: utmContent
     };
+
+    // Add custom parameters to raw_params for completeness
+    for (var param in customParams) {
+      if (customParams.hasOwnProperty(param)) {
+        result.raw_params[param] = customParams[param];
+      }
+    }
+
+    // Add custom parameters to root level of result object
+    for (var param in customParams) {
+      if (customParams.hasOwnProperty(param)) {
+        result[param] = customParams[param];
+      }
+    }
 
     // Create normalized versions for logic processing
     // This ensures consistent comparison regardless of case
@@ -818,51 +913,12 @@
           return result;
         }
 
-          if (medium.includes('cpc') || medium.includes('ppc')) {
-            // Shopping platforms
-            if (source.includes('alibaba') || source.includes('amazon') ||
-              source.includes('google shopping') || source.includes('shopify') ||
-              source.includes('etsy') || source.includes('ebay') ||
-              source.includes('stripe') || source.includes('walmart') ||
-              campaign.includes('shop') || campaign.includes('shopping')) {
-              result.channel_group = 'paid_shopping';
-            }
-            // Search engines
-            else if (source.includes('baidu') || source.includes('bing') ||
-              source.includes('duckduckgo') || source.includes('ecosia') ||
-              source.includes('google') || source.includes('yahoo') ||
-              source.includes('yandex')) {
-              result.channel_group = 'paid_search';
-              if (isBrand) result.medium = 'paid-brand';
-              else result.medium = 'paid-generic';
-            }
-            // Social platforms
-            else if (source.includes('badoo') || source.includes('facebook') ||
-              source.includes('fb') || source.includes('instagram') ||
-              source.includes('linkedin') || source.includes('pinterest') ||
-              source.includes('tiktok') || source.includes('twitter') ||
-              source.includes('whatsapp')) {
-              result.channel_group = 'paid_social';
-            }
-            // Video platforms
-            else if (source.includes('dailymotion') || source.includes('disneyplus') ||
-              source.includes('netflix') || source.includes('youtube') ||
-              source.includes('vimeo') || source.includes('twitch')) {
-              result.channel_group = 'paid_video';
-            }
-            // Cross-network
-            else if (campaign.includes('cross-network')) {
-              result.channel_group = 'cross_network';
-            }
-            // Default paid search
-            else {
-              result.channel_group = 'paid_search';
-              if (isBrand) result.medium = 'paid-brand';
-              else result.medium = 'paid-generic';
-            }
-          }
+          // Legacy path: includes('cpc'|'ppc') - only active if normalization is extended
+          // Since normalizeUTMMedium() already converts 'cpc'/'ppc' to 'paid_search',
+          // this block is effectively dead code. Kept for potential future extensions.
+          // if (medium.includes('cpc') || medium.includes('ppc')) { ... }
           // Display/Remarketing
-          else if (medium.includes('disp') || medium.includes('banner') ||
+          if (medium.includes('disp') || medium.includes('banner') ||
             medium.includes('expandable') || medium.includes('interstitial') ||
             medium.includes('cpm') || source.includes('criteo')) {
             if (campaign.includes('remarketing') || source.includes('retargeting') ||
@@ -1412,6 +1468,10 @@
       // New marketing session started
       // This happens when: external referrer, timeout exceeded, or first visit
       debugLog('log', 'TS Classifier: New session detected, classifying...');
+
+      // Cleanup old session keys from localStorage (nice-to-have)
+      cleanupOldSessionKeys(sessionId);
+
       trafficSource = classifyTrafficSource(timestamp);
 
     } else if (signals.carryAllowed) {
@@ -1509,6 +1569,23 @@
     if (trafficSource.soft_alias_used) {
       debugInfo.soft_alias_used = true;
       debugLog('log', 'TS Classifier: Soft alias used - utm_medium=paid normalized to paid_social');
+    }
+
+    // Add custom parameters to debug info
+    var customParamsDebug = {};
+    var hasCustomParams = false;
+    for (var i = 0; i < CONFIG.CUSTOM_PARAMS.length; i++) {
+      var base = CONFIG.CUSTOM_PARAMS[i];
+      var pref = 'cp_' + base;
+      if (trafficSource[pref]) {
+        customParamsDebug[pref] = trafficSource[pref];
+        hasCustomParams = true;
+      }
+    }
+
+    if (hasCustomParams) {
+      debugInfo.custom_params = customParamsDebug;
+      debugLog('log', 'TS Classifier: Custom parameters detected:', customParamsDebug);
     }
 
     debugLog('log', 'TS Classifier: Stored traffic source:', debugInfo);

@@ -382,7 +382,7 @@ document.body.classList.add('experiment-' + experimentGroup);
 function getTrafficSourceFromOtherTabs() {
   var sessionId = window.__ms?.sessionId;
   if (!sessionId) return null;
-  
+
   var carryOverData = localStorage.getItem('ms_ts_by_sid:' + sessionId);
   if (carryOverData) {
     return JSON.parse(carryOverData);
@@ -402,19 +402,19 @@ if (ts) {
 // Monitor data quality issues
 function checkDataQuality(trafficSource) {
   var issues = [];
-  
+
   if (trafficSource.plausibility_conflict) {
     issues.push('UTM conflict: ' + trafficSource.conflict_reason);
   }
-  
+
   if (trafficSource.missing_medium) {
     issues.push('Missing or invalid medium');
   }
-  
+
   if (trafficSource.source === 'unknown') {
     issues.push('Unknown traffic source');
   }
-  
+
   if (issues.length > 0) {
     console.warn('Data quality issues detected:', issues);
     // Send to monitoring system
@@ -511,6 +511,94 @@ For comprehensive information about how the system works, see the **[Traffic Sou
 
 ### Feature Detection
 The script automatically detects browser capabilities and only loads polyfills when necessary, ensuring optimal performance on modern browsers.
+
+## Custom URL Parameters
+
+GTM Traffic Source supports custom URL parameters that are stored both on the root level of the traffic source object and in the `raw_params` for easy access.
+
+### Configuration
+
+Define custom parameters in the `CONFIG.CUSTOM_PARAMS` array:
+
+```javascript
+// Example: ['adgroupid', 'location', 'device_type', 'placement']
+CUSTOM_PARAMS: []
+```
+
+**Important Notes:**
+- Custom parameters are automatically prefixed with `cp_` to avoid conflicts with reserved fields
+- Parameters are case-insensitive (use lowercase in configuration for clarity)
+- Reserved fields (id, source, medium, etc.) are automatically skipped
+
+### Data Structure
+
+Custom parameters are added to both the root level and `raw_params`:
+
+```javascript
+{
+  // Standard traffic source properties
+  "id": "ts_1758043189465_abc123",
+  "source": "google",
+  "medium": "cpc",
+  "campaign": "winter2024",
+  "channel_group": "paid_search",
+
+  // Custom parameters on root level (prefixed with cp_)
+  "cp_adgroupid": "ag123",
+  "cp_location": "de",
+  "cp_device_type": "mobile",
+  "cp_placement": "search",
+
+  // Raw parameters (includes custom parameters)
+  "raw_params": {
+    "utm_source": "google",
+    "utm_medium": "cpc",
+    "utm_campaign": "winter2024",
+    "adgroupid": "ag123",
+    "location": "de",
+    "device_type": "mobile",
+    "placement": "search"
+  }
+}
+```
+
+### Usage
+
+```javascript
+// Direct access to custom parameters (note the cp_ prefix)
+var trafficSource = JSON.parse(sessionStorage.getItem('ms_ts_current'));
+var adgroupid = trafficSource.cp_adgroupid;
+var location = trafficSource.cp_location;
+var deviceType = trafficSource.cp_device_type;
+
+// Form integration
+document.getElementById('adgroupid').value = trafficSource.cp_adgroupid || '';
+document.getElementById('location').value = trafficSource.cp_location || '';
+```
+
+## Performance & Maintenance
+
+### Automatic Cleanup
+
+GTM Traffic Source automatically cleans up old session data from localStorage to maintain optimal performance:
+
+- **When**: Only on new session start (not on page reloads)
+- **What**: Removes old `ms_ts_by_sid:*` keys (keeps current session)
+- **Limit**: Maximum 10 keys per cleanup (prevents performance impact)
+- **Benefit**: Keeps localStorage lean and fast
+
+```javascript
+// Cleanup runs automatically on session start
+if (signals.isStart) {
+  cleanupOldSessionKeys(sessionId);  // Removes old session data
+}
+```
+
+**Debug Information:**
+```javascript
+// Console output when cleanup occurs
+TS Classifier: Cleaned up 5 old session keys from localStorage
+```
 
 ## Troubleshooting
 

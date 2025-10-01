@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GTM Traffic Source - Custom Parameters Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #007cba;
+            padding-bottom: 10px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .test-url {
+            background: #e8f4f8;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            margin: 10px 0;
+            word-break: break-all;
+        }
+        .result {
+            background: #f0f8f0;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border-left: 4px solid #4CAF50;
+        }
+        .error {
+            background: #ffe6e6;
+            border-left: 4px solid #f44336;
+        }
+        .info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+        }
+        .code {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 14px;
+            overflow-x: auto;
+        }
+        .param-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .param-item {
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .param-name {
+            font-weight: bold;
+            color: #007cba;
+        }
+        .param-value {
+            color: #666;
+            font-family: monospace;
+        }
+        .validation-status {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 5px;
+        }
+        .valid {
+            background: #d4edda;
+            color: #155724;
+        }
+        .invalid {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .button {
+            background: #007cba;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .button:hover {
+            background: #005a87;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 GTM Traffic Source - Custom Parameters Test</h1>
+
+        <div class="test-section">
+            <h2>📋 Test URLs mit Custom Parameters</h2>
+            <p>Teste verschiedene URL-Kombinationen mit Custom Parameters:</p>
+
+            <div class="test-url">
+                <strong>Test 1 - Google Ads mit Custom Params:</strong><br>
+                <a href="?gclid=123&utm_source=google&utm_medium=cpc&utm_campaign=winter2024&adgroupid=ag123&location=de&device_type=mobile&placement=search" target="_blank">
+                    ?gclid=123&utm_source=google&utm_medium=cpc&utm_campaign=winter2024&adgroupid=ag123&location=de&device_type=mobile&placement=search
+                </a>
+            </div>
+
+            <div class="test-url">
+                <strong>Test 2 - Facebook Ads mit Custom Params:</strong><br>
+                <a href="?fbclid=456&utm_source=facebook&utm_medium=paid_social&utm_campaign=summer2024&adgroupid=fb_ag456&adset_id=as789&creative_id=cr101&audience=lookalike_1&placement=feed" target="_blank">
+                    ?fbclid=456&utm_source=facebook&utm_medium=paid_social&utm_campaign=summer2024&adgroupid=fb_ag456&adset_id=as789&creative_id=cr101&audience=lookalike_1&placement=feed
+                </a>
+            </div>
+
+            <div class="test-url">
+                <strong>Test 3 - UTM Only mit Custom Params:</strong><br>
+                <a href="?utm_source=newsletter&utm_medium=email&utm_campaign=newsletter2024&location=us&device_type=desktop&creative_type=image&ad_format=banner" target="_blank">
+                    ?utm_source=newsletter&utm_medium=email&utm_campaign=newsletter2024&location=us&device_type=desktop&creative_type=image&ad_format=banner
+                </a>
+            </div>
+
+            <div class="test-url">
+                <strong>Test 4 - Mixed Custom Params:</strong><br>
+                <a href="?utm_source=test&utm_medium=test&device_type=mobile&placement=feed&audience=lookalike_1&campaign_id=12345" target="_blank">
+                    ?utm_source=test&utm_medium=test&device_type=mobile&placement=feed&audience=lookalike_1&campaign_id=12345
+                </a>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>🔍 Aktuelle Traffic Source Daten</h2>
+            <div id="current-traffic-source" class="result">
+                <p><strong>Lade Traffic Source Daten...</strong></p>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>📊 Custom Parameters Übersicht</h2>
+            <div id="custom-params-overview" class="result">
+                <p><strong>Lade Custom Parameters...</strong></p>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>🛠️ Debug Information</h2>
+            <div id="debug-info" class="result">
+                <p><strong>Lade Debug Information...</strong></p>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>📝 Form Integration Test</h2>
+            <p>Teste die Form-Integration mit Custom Parameters:</p>
+            <form id="test-form" style="background: white; padding: 20px; border-radius: 4px; border: 1px solid #ddd;">
+                <h3>Hidden Form Fields (automatisch befüllt):</h3>
+                <div class="param-list">
+                    <div class="param-item">
+                        <div class="param-name">traffic_source:</div>
+                        <input type="hidden" name="traffic_source" id="traffic_source">
+                        <span id="traffic_source_display">-</span>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-name">traffic_medium:</div>
+                        <input type="hidden" name="traffic_medium" id="traffic_medium">
+                        <span id="traffic_medium_display">-</span>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-name">traffic_campaign:</div>
+                        <input type="hidden" name="traffic_campaign" id="traffic_campaign">
+                        <span id="traffic_campaign_display">-</span>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-name">adgroupid:</div>
+                        <input type="hidden" name="adgroupid" id="adgroupid">
+                        <span id="adgroupid_display">-</span>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-name">location:</div>
+                        <input type="hidden" name="location" id="location">
+                        <span id="location_display">-</span>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-name">device_type:</div>
+                        <input type="hidden" name="device_type" id="device_type">
+                        <span id="device_type_display">-</span>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-name">placement:</div>
+                        <input type="hidden" name="placement" id="placement">
+                        <span id="placement_display">-</span>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-name">audience:</div>
+                        <input type="hidden" name="audience" id="audience">
+                        <span id="audience_display">-</span>
+                    </div>
+                </div>
+                <button type="button" class="button" onclick="populateForm()">Formular befüllen</button>
+                <button type="button" class="button" onclick="submitForm()">Formular testen</button>
+            </form>
+        </div>
+
+        <div class="test-section">
+            <h2>🔄 Aktualisieren</h2>
+            <button class="button" onclick="updateDisplay()">Daten aktualisieren</button>
+            <button class="button" onclick="clearStorage()">Storage leeren</button>
+        </div>
+    </div>
+
+    <script>
+        // Simuliere die GTM Traffic Source Logik für Test-Zwecke
+        function simulateTrafficSource() {
+            // Simuliere die erweiterte Traffic Source Struktur
+            var mockTrafficSource = {
+                id: "ts_" + Date.now() + "_test123",
+                timestamp: Date.now(),
+                entry_url: window.location.href,
+                referrer: document.referrer || '',
+                method: 'click_id',
+                channel_group: 'paid_search',
+                source: 'google',
+                medium: 'cpc',
+                campaign: 'winter2024',
+                term: 'winter boots',
+                content: 'ad_variant_a',
+                ad_platform: 'google_ads',
+                click_id: 'Cj0KCQiA_test123',
+
+                // Custom Parameters auf Root-Ebene (mit cp_ Prefix)
+                cp_adgroupid: getUrlParam('adgroupid') || '',
+                cp_location: getUrlParam('location') || '',
+                cp_campaign_id: getUrlParam('campaign_id') || '',
+                cp_adset_id: getUrlParam('adset_id') || '',
+                cp_creative_id: getUrlParam('creative_id') || '',
+                cp_placement: getUrlParam('placement') || '',
+                cp_audience: getUrlParam('audience') || '',
+                cp_device_type: getUrlParam('device_type') || '',
+                cp_creative_type: getUrlParam('creative_type') || '',
+                cp_ad_format: getUrlParam('ad_format') || '',
+                cp_targeting: getUrlParam('targeting') || '',
+                cp_budget_type: getUrlParam('budget_type') || '',
+
+                raw_params: {
+                    utm_source: getUrlParam('utm_source') || '',
+                    utm_medium: getUrlParam('utm_medium') || '',
+                    utm_campaign: getUrlParam('utm_campaign') || '',
+                    utm_term: getUrlParam('utm_term') || '',
+                    utm_content: getUrlParam('utm_content') || '',
+                    adgroupid: getUrlParam('adgroupid') || '',
+                    location: getUrlParam('location') || '',
+                    campaign_id: getUrlParam('campaign_id') || '',
+                    adset_id: getUrlParam('adset_id') || '',
+                    creative_id: getUrlParam('creative_id') || '',
+                    placement: getUrlParam('placement') || '',
+                    audience: getUrlParam('audience') || '',
+                    device_type: getUrlParam('device_type') || '',
+                    creative_type: getUrlParam('creative_type') || '',
+                    ad_format: getUrlParam('ad_format') || '',
+                    targeting: getUrlParam('targeting') || '',
+                    budget_type: getUrlParam('budget_type') || ''
+                },
+
+                classifier_version: '1.0.0',
+                source_of_truth: 'click_id',
+                plausibility_conflict: false,
+                conflict_reason: '',
+                soft_alias_used: false,
+                missing_medium: false
+            };
+
+            return mockTrafficSource;
+        }
+
+        function getUrlParam(name) {
+            var urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        function updateDisplay() {
+            var trafficSource = simulateTrafficSource();
+
+            // Zeige aktuelle Traffic Source Daten
+            document.getElementById('current-traffic-source').innerHTML =
+                '<h3>Traffic Source Objekt:</h3>' +
+                '<div class="code">' + JSON.stringify(trafficSource, null, 2) + '</div>';
+
+            // Zeige Custom Parameters Übersicht
+            var customParams = {};
+            var customParamsList = [
+                'cp_adgroupid', 'cp_location', 'cp_campaign_id', 'cp_adset_id', 'cp_creative_id',
+                'cp_placement', 'cp_audience', 'cp_device_type', 'cp_creative_type', 'cp_ad_format',
+                'cp_targeting', 'cp_budget_type'
+            ];
+
+            customParamsList.forEach(function(param) {
+                if (trafficSource[param]) {
+                    customParams[param] = trafficSource[param];
+                }
+            });
+
+            var customParamsHtml = '<h3>Custom Parameters (Root-Ebene):</h3>';
+            if (Object.keys(customParams).length > 0) {
+                customParamsHtml += '<div class="param-list">';
+                for (var param in customParams) {
+                    customParamsHtml +=
+                        '<div class="param-item">' +
+                        '<div class="param-name">' + param + ':</div>' +
+                        '<div class="param-value">' + customParams[param] + '</div>' +
+                        '</div>';
+                }
+                customParamsHtml += '</div>';
+            } else {
+                customParamsHtml += '<p class="info">Keine Custom Parameters gefunden.</p>';
+            }
+
+            document.getElementById('custom-params-overview').innerHTML = customParamsHtml;
+
+            // Zeige Debug Information
+            var debugInfo = {
+                sessionId: 'session_' + Date.now() + '_test',
+                method: trafficSource.method,
+                channel_group: trafficSource.channel_group,
+                source: trafficSource.source,
+                medium: trafficSource.medium,
+                campaign: trafficSource.campaign,
+                custom_params: customParams
+            };
+
+            document.getElementById('debug-info').innerHTML =
+                '<h3>Debug Information:</h3>' +
+                '<div class="code">' + JSON.stringify(debugInfo, null, 2) + '</div>';
+        }
+
+        function populateForm() {
+            var trafficSource = simulateTrafficSource();
+
+            // Standard Traffic Source
+            document.getElementById('traffic_source').value = trafficSource.source;
+            document.getElementById('traffic_source_display').textContent = trafficSource.source;
+
+            document.getElementById('traffic_medium').value = trafficSource.medium;
+            document.getElementById('traffic_medium_display').textContent = trafficSource.medium;
+
+            document.getElementById('traffic_campaign').value = trafficSource.campaign;
+            document.getElementById('traffic_campaign_display').textContent = trafficSource.campaign;
+
+            // Custom Parameters (mit cp_ Prefix)
+            var customParams = ['cp_adgroupid', 'cp_location', 'cp_device_type', 'cp_placement', 'cp_audience'];
+            customParams.forEach(function(param) {
+                var value = trafficSource[param] || '';
+                var fieldName = param.replace('cp_', ''); // Entferne Prefix für Form-Felder
+                document.getElementById(fieldName).value = value;
+                document.getElementById(fieldName + '_display').textContent = value || '-';
+            });
+        }
+
+        function submitForm() {
+            var formData = new FormData(document.getElementById('test-form'));
+            var data = {};
+            for (var pair of formData.entries()) {
+                data[pair[0]] = pair[1];
+            }
+
+            alert('Formular würde gesendet werden mit folgenden Daten:\n\n' +
+                  JSON.stringify(data, null, 2));
+        }
+
+        function clearStorage() {
+            if (confirm('Storage wirklich leeren?')) {
+                sessionStorage.clear();
+                localStorage.clear();
+                updateDisplay();
+            }
+        }
+
+        // Initiale Anzeige
+        updateDisplay();
+    </script>
+</body>
+</html>
